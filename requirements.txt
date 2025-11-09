@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+httpx
+selectolax
+motor
+pydantic
+pydantic-settings
+slowapi
+apscheduler
+python-dotenv
+rich
+pytest
+pytest-asyncio
+backoff
+httpx[http2]

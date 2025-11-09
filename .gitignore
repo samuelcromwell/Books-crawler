@@ -1,0 +1,52 @@
+# Ignore operating system generated files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Ignore IDE-specific files and directories
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Ignore build artifacts and temporary files
+build/
+dist/
+target/
+*.log
+*.tmp
+*.bak
+*.obj
+*.exe
+*.dll
+*.so
+*.o
+*.pyc
+__pycache__/
+
+# Ignore dependency directories
+node_modules/
+vendor/
+
+# Ignore sensitive files
+.env
+.env.*
+config.local.php
+credentials.json
+
+# Ignore user-specific files
+*.user
+*.suo
+
+# Ignore compressed archives and installers
+*.zip
+*.tar.gz
+*.rar
+*.7z
+*.dmg
+*.iso
+
+# Ignore package manager lock files (optional, depending on project needs)
+package-lock.json
+yarn.lock
