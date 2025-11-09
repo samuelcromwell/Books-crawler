@@ -50,3 +50,5 @@ credentials.json
 # Ignore package manager lock files (optional, depending on project needs)
 package-lock.json
 yarn.lock
+
+/venv
