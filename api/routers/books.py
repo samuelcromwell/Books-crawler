@@ -1,9 +1,10 @@
+from typing import Literal
 from fastapi import APIRouter, Depends, Query, HTTPException, Request
+from bson import ObjectId
+from datetime import datetime
 from api.deps import get_db, api_key_auth
 from api.rate_limit import limiter
 from utils.config import settings
-from bson import ObjectId
-from datetime import datetime
 
 router = APIRouter(prefix="/books", tags=["books"])
 
@@ -11,7 +12,7 @@ def _to_jsonable(obj):
     """Recursively convert Mongo types; map _id -> id."""
     if isinstance(obj, ObjectId):
         return str(obj)
-    if isinstance(obj, (datetime,)):  # FastAPI can encode datetime
+    if isinstance(obj, (datetime,)):
         return obj
     if isinstance(obj, list):
         return [_to_jsonable(x) for x in obj]
@@ -28,51 +29,60 @@ def _to_jsonable(obj):
 @router.get("", dependencies=[Depends(api_key_auth)])
 @limiter.limit(settings.RATE_LIMIT)
 async def list_books(
-    request: Request,   # slowapi needs this
+    request: Request,   # required by slowapi
     category: str | None = None,
     min_price: float | None = None,
     max_price: float | None = None,
     rating: int | None = Query(None, ge=1, le=5),
-    sort_by: str | None = Query(None, pattern="^(rating|price|reviews)$"),
-    page: int = 1,
-    page_size: int = 20,
+    sort_by: Literal["rating","price","reviews"] | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     db=Depends(get_db),
 ):
-    if page < 1 or page_size < 1 or page_size > 100:
-        raise HTTPException(status_code=400, detail="Invalid pagination")
-
     # base filter
     q: dict = {}
     if category:
         q["category"] = category
-    if rating:
+    if rating is not None:
         q["rating"] = rating
 
-    # use aggregation if we need numeric price filter/sort
-    use_pipeline = bool(min_price is not None or max_price is not None or sort_by == "price")
+    # Decide if we need aggregation (numeric price filter/sort)
+    use_pipeline = (min_price is not None) or (max_price is not None) or (sort_by == "price")
+
     if use_pipeline:
+        # Build robust _price_num:
+        # - If already number, use as-is
+        # - Else, strip "£" and commas, then convert to double
         pipeline = [
             {
                 "$addFields": {
                     "_price_num": {
-                        "$convert": {
-                            "input": {
-                                "$replaceAll": {
+                        "$cond": [
+                            {"$isNumber": "$price_incl_tax"},
+                            "$price_incl_tax",
+                            {
+                                "$convert": {
                                     "input": {
                                         "$replaceAll": {
-                                            "input": {"$ifNull": ["$price_incl_tax", ""]},
-                                            "find": "£",
+                                            "input": {
+                                                "$replaceAll": {
+                                                    "input": {
+                                                        "$ifNull": ["$price_incl_tax", ""]
+                                                    },
+                                                    "find": "£",
+                                                    "replacement": ""
+                                                }
+                                            },
+                                            "find": ",",
                                             "replacement": ""
                                         }
                                     },
-                                    "find": ",",
-                                    "replacement": ""
+                                    "to": "double",
+                                    "onError": None,
+                                    "onNull": None,
                                 }
-                            },
-                            "to": "double",
-                            "onError": None,
-                            "onNull": None,
-                        }
+                            }
+                        ]
                     }
                 }
             },
@@ -81,20 +91,24 @@ async def list_books(
 
         price_match = {}
         if min_price is not None:
-            price_match["$gte"] = min_price
+            price_match["$gte"] = float(min_price)
         if max_price is not None:
-            price_match["$lte"] = max_price
+            price_match["$lte"] = float(max_price)
         if price_match:
             pipeline.append({"$match": {"_price_num": price_match}})
+
+        # Sorting: if price sort requested, sort on computed numeric field, else default by name
+        sort_stage = {"$sort": {"_price_num": 1, "name": 1}} if sort_by == "price" else {"$sort": {"name": 1}}
 
         pipeline.extend([
             {
                 "$facet": {
                     "items": [
-                        {"$sort": {"_price_num": 1, "name": 1}},
+                        sort_stage,
                         {"$skip": (page - 1) * page_size},
                         {"$limit": page_size},
-                        {"$project": {"raw_html": 0}},
+                        # Exclude raw HTML & helper
+                        {"$project": {"_raw_html": 0, "raw_html": 0, "_price_num": 0}},
                     ],
                     "meta": [{"$count": "total"}],
                 }
@@ -103,10 +117,12 @@ async def list_books(
 
         agg = db.books.aggregate(pipeline)
         result = [doc async for doc in agg]
-        items = result[0].get("items", []) if result else []
-        meta = result[0].get("meta", []) if result else []
+        bucket = result[0] if result else {}
+        items = bucket.get("items", [])
+        meta = bucket.get("meta", [])
         total = (meta[0]["total"] if meta else 0)
         pages = (total + page_size - 1) // page_size
+
         return {
             "page": page,
             "page_size": page_size,
@@ -115,16 +131,19 @@ async def list_books(
             "items": [_to_jsonable(it) for it in items],
         }
 
-    # simple path (no numeric price needs)
+    # Simple path (no numeric price required)
+    # Sort directions: rating ↓, reviews ↓; fallback by name ↑
     sort_spec = None
     if sort_by == "rating":
-        sort_spec = [("rating", 1), ("name", 1)]
+        sort_spec = [("rating", -1), ("name", 1)]
     elif sort_by == "reviews":
-        sort_spec = [("num_reviews", 1), ("name", 1)]
+        # Standardize the field name used in storage; choose "reviews"
+        sort_spec = [("reviews", -1), ("name", 1)]
 
     total = await db.books.count_documents(q)
     pages = (total + page_size - 1) // page_size
-    proj = {"raw_html": 0}
+
+    proj = {"_raw_html": 0, "raw_html": 0}  # exclude snapshots if either naming exists
     cursor = db.books.find(q, proj)
     if sort_spec:
         cursor = cursor.sort(sort_spec)
