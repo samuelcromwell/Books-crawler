@@ -239,6 +239,29 @@ This README provides all necessary information for running the project locally o
 | `GET` | `/books/{id}` | Get detailed information for a specific book. |
 | `GET` | `/changes` | View recent change logs, filterable by date and URL. |
 
+### API reference example commands
+```
+export API_KEY="<your-new-key>"
+
+# list, pretty-print
+curl -s -H "X-API-Key: $API_KEY" "http://localhost:9010/books?page=1&page_size=10" | python -m json.tool
+
+# filter + price range + sort by price
+curl -s -H "X-API-Key: $API_KEY" \
+  "http://localhost:9010/books?category=Mystery&min_price=10&max_price=30&sort_by=price&page=1&page_size=10" \
+  | python -m json.tool
+
+# sort by rating
+curl -s -H "X-API-Key: $API_KEY" "http://localhost:9010/books?sort_by=rating&page=1&page_size=5" | python -m json.tool
+
+# get one book by id
+BOOK_ID=$(
+  curl -s -H "X-API-Key: $API_KEY" "http://localhost:9010/books?page=1&page_size=1" \
+  | python -c 'import sys,json; print(json.load(sys.stdin)["items"][0]["id"])'
+)
+curl -s -H "X-API-Key: $API_KEY" "http://localhost:9010/books/$BOOK_ID" | python -m json.tool
+
+```
 ---
 
 ## 🛠️ Tech Stack
@@ -391,6 +414,12 @@ Example document (trimmed):
 }
 
 ```
+
+### Commands
+The Commands.md file shows the various specific API calls and their responses
+
+### Screenshots
+Screenshots of successful crawl runs and scheduler runs are attached in images folder
 
 ## License & Acknowledgements
 
